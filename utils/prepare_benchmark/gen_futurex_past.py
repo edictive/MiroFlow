@@ -27,7 +27,7 @@ def gen_futurex_past(hf_token: str) -> Generator[Task, None, None]:
         for idx, sample in enumerate(split_data):
             # Map required fields
             task_id = sample.get("question_id", f"futurex_past_{split_name}_{idx}")
-            task_question = sample.get("question", sample.get("prompt", ""))
+            task_question = sample.get("prompt") or sample.get("question", "")
             ground_truth = sample.get("answer", "")
 
             # Build metadata with normalized keys
@@ -47,6 +47,10 @@ def gen_futurex_past(hf_token: str) -> Generator[Task, None, None]:
                 "dataset_name": "FutureX-Past",
             }
 
+            if not metadata.get("prompt") and sample.get("question"):
+                # Backfill the human-readable question text for reference.
+                metadata["question"] = sample.get("question")
+
             # Create standardized Task object
             task = Task(
                 task_id=task_id,
@@ -59,5 +63,4 @@ def gen_futurex_past(hf_token: str) -> Generator[Task, None, None]:
             yield task
 
     return
-
 
