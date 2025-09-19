@@ -1,0 +1,25 @@
+defaults:
+  - agent_quickstart_1
+  - override benchmark: futurex
+  - _self_
+
+main_agent:
+  llm:
+    model_name: ${oc.env:OPENAI_MODEL_NAME,qwen/qwen3-next-80b-a3b-thinking}
+    openrouter_provider: ${oc.env:OPENAI_PROVIDER,""}
+
+sub_agents:
+  agent-worker:
+    llm:
+      model_name: ${oc.env:WORKER_MODEL_NAME,qwen/qwen3-next-80b-a3b-thinking}
+      openrouter_provider: ${oc.env:WORKER_PROVIDER,""}
+
+benchmark:
+  execution:
+    max_tasks: 1
+    max_concurrent: 1
+    pass_at_k: 1
+  openai_api_key: ${oc.env:BENCHMARK_OPENAI_API_KEY,skip_evaluation}
+
+output_dir: ${oc.env:OUTPUT_DIR,logs/futurex_single_run}
+data_dir: ${oc.env:DATA_DIR,data}

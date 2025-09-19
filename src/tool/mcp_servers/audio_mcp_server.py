@@ -16,13 +16,20 @@ from mutagen import File as MutagenFile
 import asyncio
 
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
 OPENAI_TRANSCRIPTION_MODEL_NAME = os.environ.get(
-    "OPENAI_TRANSCRIPTION_MODEL_NAME", "gpt-4o-transcribe"
+    "OPENAI_TRANSCRIPTION_MODEL_NAME", "openai/gpt-4o-mini-transcribe"
 )
 OPENAI_AUDIO_MODEL_NAME = os.environ.get(
-    "OPENAI_AUDIO_MODEL_NAME", "gpt-4o-audio-preview"
+    "OPENAI_AUDIO_MODEL_NAME", "openai/gpt-4o-audio-preview"
 )
+
+# Dedicated Whisper credentials (optional)
+OPENAI_WHISPER_API_KEY = os.environ.get("OPENAI_WHISPER_API_KEY")
+OPENAI_WHISPER_BASE_URL = os.environ.get(
+    "OPENAI_WHISPER_BASE_URL", "https://api.openai.com/v1"
+)
+OPENAI_WHISPER_MODEL = os.environ.get("OPENAI_WHISPER_MODEL", "whisper-1")
 
 # Initialize FastMCP server
 mcp = FastMCP("audio-mcp-server")
@@ -139,13 +146,28 @@ async def audio_transcription(audio_path_or_url: str) -> str:
     retry = 0
     transcription = None
 
+    # Prefer Whisper credentials when available, otherwise fall back to OpenRouter audio model
+    if OPENAI_WHISPER_API_KEY:
+        transcription_client = OpenAI(
+            api_key=OPENAI_WHISPER_API_KEY,
+            base_url=OPENAI_WHISPER_BASE_URL,
+        )
+        transcription_model = OPENAI_WHISPER_MODEL
+    elif OPENAI_API_KEY:
+        transcription_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+        transcription_model = OPENAI_TRANSCRIPTION_MODEL_NAME
+    else:
+        return (
+            "[ERROR]: No transcription-capable API key configured. Set OPENAI_WHISPER_API_KEY "
+            "or OPENAI_API_KEY to enable audio transcription."
+        )
+
     while retry < max_retries:
         try:
-            client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
             if os.path.exists(audio_path_or_url):  # Check if the file exists locally
                 with open(audio_path_or_url, "rb") as audio_file:
-                    transcription = client.audio.transcriptions.create(
-                        model="gpt-4o-transcribe", file=audio_file
+                    transcription = transcription_client.audio.transcriptions.create(
+                        model=transcription_model, file=audio_file
                     )
             elif "home/user" in audio_path_or_url:
                 return "The audio_transcription tool cannot access to sandbox file, please use the local path provided by original instruction"
@@ -173,8 +195,8 @@ async def audio_transcription(audio_path_or_url: str) -> str:
 
                 try:
                     with open(temp_audio_path, "rb") as audio_file:
-                        transcription = client.audio.transcriptions.create(
-                            model=OPENAI_TRANSCRIPTION_MODEL_NAME, file=audio_file
+                        transcription = transcription_client.audio.transcriptions.create(
+                            model=transcription_model, file=audio_file
                         )
                 finally:
                     # Clean up the temp file

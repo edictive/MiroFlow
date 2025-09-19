@@ -15,8 +15,8 @@ ANTHROPIC_MODEL_NAME = os.environ.get(
     "ANTHROPIC_MODEL_NAME", "claude-3-7-sonnet-20250219"
 )
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
-OPENAI_MODEL_NAME = os.environ.get("OPENAI_MODEL_NAME", "o3")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1")
+OPENAI_MODEL_NAME = os.environ.get("OPENAI_MODEL_NAME", "qwen/qwen3-32b")
 
 # Initialize FastMCP server
 mcp = FastMCP("reasoning-mcp-server")

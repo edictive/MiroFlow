@@ -95,7 +95,11 @@ Just return the letters "A", "B", or "C", with no text around it.
 
 @retry(wait=wait_exponential(multiplier=5), stop=stop_after_attempt(5))
 async def verify_answer_llm_simpleqa(
-    openai_client: AsyncOpenAI, question: str, target: str, predicted_answer: str
+    openai_client: AsyncOpenAI,
+    question: str,
+    target: str,
+    predicted_answer: str,
+    model_name: str | None = None,
 ) -> str:
     """
     Use LLM to verify if the predicted answer is correct.
@@ -112,7 +116,7 @@ async def verify_answer_llm_simpleqa(
     CHOICE_MAP = {"A": "CORRECT", "B": "INCORRECT", "C": "NOT_ATTEMPTED"}
 
     llm_response = await openai_client.chat.completions.create(
-        model="gpt-4o-mini", messages=messages, max_completion_tokens=2
+        model=model_name or "gpt-4o-mini", messages=messages, max_completion_tokens=2
     )
     content = llm_response.choices[0].message.content
     match = re.search(r"(A|B|C)", content)
@@ -151,7 +155,11 @@ class XBenchExtractedAnswer(BaseModel):
 
 @retry(wait=wait_exponential(multiplier=5), stop=stop_after_attempt(5))
 async def verify_answer_llm_xbench(
-    openai_client: AsyncOpenAI, question: str, target: str, predicted_answer: str
+    openai_client: AsyncOpenAI,
+    question: str,
+    target: str,
+    predicted_answer: str,
+    model_name: str | None = None,
 ) -> str:
     """
     Use XBench-style LLM judge (o3) to verify if the predicted answer is correct.
@@ -170,7 +178,7 @@ async def verify_answer_llm_xbench(
     )
 
     response = await openai_client.beta.chat.completions.parse(
-        model="o3",  # xbench by default uses deepseek-v3 ?
+        model=model_name or "o3",
         max_completion_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
         response_format=XBenchExtractedAnswer,
@@ -222,7 +230,11 @@ class HLEExtractedAnswer(BaseModel):
 
 @retry(wait=wait_exponential(multiplier=5), stop=stop_after_attempt(5))
 async def verify_answer_llm_hle(
-    openai_client: AsyncOpenAI, question: str, target: str, predicted_answer: str
+    openai_client: AsyncOpenAI,
+    question: str,
+    target: str,
+    predicted_answer: str,
+    model_name: str | None = None,
 ) -> str:
     """
     Use HLE-style LLM judge to verify if the predicted answer is correct.
@@ -241,7 +253,7 @@ async def verify_answer_llm_hle(
     )
 
     response = await openai_client.beta.chat.completions.parse(
-        model="o3-mini-2025-01-31",
+        model=model_name or "o3-mini-2025-01-31",
         max_completion_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
         response_format=HLEExtractedAnswer,
@@ -375,11 +387,12 @@ async def verify_answer_gaia(target: str, predicted_answer: str) -> str:
 
 
 async def verify_answer_for_datasets(
-    openai_client: AsyncOpenAI,
+    openai_client: AsyncOpenAI | None,
     benchmark_name: str,
     question: str,
     target: str,
     predicted_answer: str,
+    judge_model_name: str | None = None,
 ) -> str:
     """
     Verify the answer for a given dataset.
@@ -395,24 +408,44 @@ async def verify_answer_for_datasets(
         elif "gaia-validation-text" not in benchmark_name and "gaia" in benchmark_name:
             return gaia_scorer_answer
 
+        if openai_client is None:
+            # No LLM judge available; fall back to GAIA result
+            return gaia_scorer_answer
+
         elif "simpleqa" in benchmark_name:
             return await verify_answer_llm_simpleqa(
-                openai_client, question, target, predicted_answer
+                openai_client,
+                question,
+                target,
+                predicted_answer,
+                model_name=judge_model_name,
             )
 
         elif "xbench" in benchmark_name:
             return await verify_answer_llm_xbench(
-                openai_client, question, target, predicted_answer
+                openai_client,
+                question,
+                target,
+                predicted_answer,
+                model_name=judge_model_name,
             )
 
         elif "browsecomp-zh" in benchmark_name:
             return await verify_answer_llm_hle(
-                openai_client, question, target, predicted_answer
+                openai_client,
+                question,
+                target,
+                predicted_answer,
+                model_name=judge_model_name,
             )
 
         else:
             return await verify_answer_llm_hle(
-                openai_client, question, target, predicted_answer
+                openai_client,
+                question,
+                target,
+                predicted_answer,
+                model_name=judge_model_name,
             )
     except Exception as e:
         print(f"Evaluation failed: {e}")

@@ -5,13 +5,16 @@
 import base64
 import os
 import random
+import tempfile
+import shutil
 from anthropic import Anthropic
 from openai import OpenAI
 from fastmcp import FastMCP
-from google import genai
-from google.genai import types
 import requests
 import asyncio
+from typing import List, Optional
+
+import yt_dlp
 
 # Anthropic credentials
 ENABLE_CLAUDE_VISION = os.environ.get("ENABLE_CLAUDE_VISION", "false").lower() == "true"
@@ -29,9 +32,47 @@ OPENAI_MODEL_NAME = os.environ.get("OPENAI_MODEL_NAME", "gpt-4o")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL_NAME = os.environ.get("GEMINI_MODEL_NAME", "gemini-2.5-pro")
+VISION_PREFERRED_PROVIDER = os.environ.get(
+    "VISION_PREFERRED_PROVIDER", ""
+).lower()
+
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+OPENROUTER_BASE_URL = os.environ.get(
+    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+)
+OPENROUTER_GEMINI_MODEL = os.environ.get(
+    "OPENROUTER_GEMINI_MODEL", "google/gemini-2.5-pro"
+)
+
+# Whisper / transcription fallbacks
+OPENAI_WHISPER_API_KEY = os.environ.get("OPENAI_WHISPER_API_KEY")
+OPENAI_WHISPER_BASE_URL = os.environ.get(
+    "OPENAI_WHISPER_BASE_URL", "https://api.openai.com/v1"
+)
+OPENAI_WHISPER_MODEL = os.environ.get("OPENAI_WHISPER_MODEL", "whisper-1")
+OPENROUTER_TRANSCRIPTION_MODEL = os.environ.get(
+    "OPENAI_TRANSCRIPTION_MODEL_NAME", "openai/gpt-4o-mini-transcribe"
+)
 
 # Initialize FastMCP server
 mcp = FastMCP("vision-mcp-server")
+
+
+def _get_openrouter_client() -> Optional[OpenAI]:
+    """Return an OpenAI client configured for OpenRouter, if credentials exist."""
+    if not OPENROUTER_API_KEY:
+        return None
+    return OpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
+
+
+def _get_whisper_client() -> Optional[OpenAI]:
+    if OPENAI_WHISPER_API_KEY:
+        return OpenAI(
+            api_key=OPENAI_WHISPER_API_KEY, base_url=OPENAI_WHISPER_BASE_URL
+        )
+    if OPENROUTER_API_KEY:
+        return OpenAI(api_key=OPENROUTER_API_KEY, base_url=OPENROUTER_BASE_URL)
+    return None
 
 
 async def detect_image_format(file_path: str) -> str:
@@ -50,6 +91,37 @@ async def detect_image_format(file_path: str) -> str:
             return await guess_mime_media_type_from_extension(file_path)
     except Exception:
         return await guess_mime_media_type_from_extension(file_path)
+
+
+async def _load_image_bytes(image_path_or_url: str) -> tuple[bytes, str]:
+    """Return raw image bytes and MIME type."""
+
+    if os.path.exists(image_path_or_url):
+        with open(image_path_or_url, "rb") as image_file:
+            image_data = image_file.read()
+        mime_type = await detect_image_format(image_path_or_url)
+        return image_data, mime_type
+
+    if "home/user" in image_path_or_url:
+        raise ValueError(
+            "The visual tools cannot access sandbox files; use a local path provided in the instruction."
+        )
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    response = requests.get(image_path_or_url, headers=headers)
+    response.raise_for_status()
+    mime_type = response.headers.get("content-type", "")
+    if not mime_type or not mime_type.startswith("image/"):
+        mime_type = "image/jpeg"
+    return response.content, mime_type
+
+
+async def _prepare_image_data_url(image_path_or_url: str) -> str:
+    data, mime_type = await _load_image_bytes(image_path_or_url)
+    b64 = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime_type};base64,{b64}"
 
 
 async def guess_mime_media_type_from_extension(file_path: str) -> str:
@@ -188,91 +260,220 @@ async def call_openai_vision(image_path_or_url: str, question: str) -> str:
 
 
 async def call_gemini_vision(image_path_or_url: str, question: str) -> str:
-    """Call Gemini vision API."""
-    try:
-        mime_type = await detect_image_format(image_path_or_url)
-        if os.path.exists(image_path_or_url):  # Check if the file exists locally
-            with open(image_path_or_url, "rb") as image_file:
-                image_data = image_file.read()
-                image = types.Part.from_bytes(
-                    data=image_data,
-                    mime_type=mime_type,
-                )
-        elif "home/user" in image_path_or_url:
-            return "The visual_question_answering tool cannot access to sandbox file, please use the local path provided by original instruction"
-        else:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-            }
-            # Simple retry for requests.get: 4 total attempts (1 initial + 3 retries)
-            max_attempts = 4
-            for attempt in range(max_attempts):
-                try:
-                    response = requests.get(image_path_or_url, headers=headers)
-                    response.raise_for_status()  # Raise an exception for bad status codes
-                    image_data = response.content
-                    break
-                except Exception as e:
-                    if attempt == max_attempts - 1:  # Last attempt
-                        raise e
-                    # Wait time: 5s, 15s, 60s for retries 1, 2, 3
-                    wait_times = [5, 15, 60]
-                    await asyncio.sleep(wait_times[attempt])
+    """Call Gemini vision API via OpenRouter."""
 
-            image = types.Part.from_bytes(
-                data=image_data,
-                mime_type=mime_type,
-            )
+    client = _get_openrouter_client()
+    if client is None:
+        return (
+            "[ERROR]: OPENROUTER_API_KEY is not set, Gemini vision via OpenRouter is unavailable."
+        )
+
+    try:
+        data_url = await _prepare_image_data_url(image_path_or_url)
     except Exception as e:
-        return f"[ERROR]: Failed to get image data {image_path_or_url}: {e}.\nNote: The visual_question_answering tool cannot access to sandbox file, please use the local path provided by original instruction or http url. If you are using http url, make sure it is an image file url."
+        return (
+            f"[ERROR]: Failed to load image {image_path_or_url}: {e}."
+            " Note: Use accessible local paths or HTTP(S) URLs."
+        )
 
     retry_count = 0
-    max_retry = 3  # 3 retries with smart timing to avoid thundering herd
+    max_retry = 3
     while retry_count <= max_retry:
         try:
-            client = genai.Client(api_key=GEMINI_API_KEY)
-
-            response = client.models.generate_content(
-                model="gemini-2.5-pro",
-                contents=[
-                    image,
-                    types.Part(text=question),
+            response = client.chat.completions.create(
+                model=OPENROUTER_GEMINI_MODEL,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": question},
+                            {
+                                "type": "input_image",
+                                "image_url": {"url": data_url},
+                            },
+                        ],
+                    }
                 ],
-                # config=types.GenerateContentConfig(temperature=0.1),
+                max_tokens=4096,
             )
 
-            # Check if response.text is None or empty after stripping
-            if response.text is None or response.text.strip() == "":
-                raise Exception("Response text is None or empty")
-
-            return response.text
+            result = response.choices[0].message.content
+            if not result or not result.strip():
+                raise RuntimeError("Empty result from Gemini via OpenRouter")
+            return result
 
         except Exception as e:
-            # Only retry for rate limit and server errors, or empty response
-            if (
-                "503" in str(e)
-                or "429" in str(e)
-                or "500" in str(e)
-                or "Response text is None or empty" in str(e)
-            ):
-                retry_count += 1
-                if retry_count > max_retry:
-                    return f"[ERROR]: Gemini Error after {retry_count} retries: {e}"
+            retry_count += 1
+            if retry_count > max_retry:
+                return f"[ERROR]: Gemini (OpenRouter) error after {max_retry} retries: {e}"
+            await asyncio.sleep(min(60, 5 * (2**retry_count)))
 
-                # Rate limit is per minute, spread 5 requests across different minute windows
-                if retry_count == 1:
-                    # First retry: wait 60-300 seconds to spread across 4 minute windows
-                    wait_time = random.randint(60, 300)
-                elif retry_count == 2:
-                    # Second retry: wait 60-180 seconds to try different window
-                    wait_time = random.randint(60, 180)
-                else:
-                    # Third retry: fixed 60 seconds - ensure crossing minute boundary
-                    wait_time = 60
 
-                await asyncio.sleep(wait_time)
-            else:
-                return f"[ERROR]: Gemini Error: {e}"
+def _canonical_provider_name(name: str) -> Optional[str]:
+    if not name:
+        return None
+    normalized = name.strip().lower()
+    mapping = {
+        "gemini": "gemini",
+        "google": "gemini",
+        "google-gemini": "gemini",
+        "openai": "openai",
+        "gpt": "openai",
+        "anthropic": "anthropic",
+        "claude": "anthropic",
+    }
+    return mapping.get(normalized)
+
+
+def _provider_available(provider: str) -> bool:
+    if provider == "gemini":
+        return bool(OPENROUTER_API_KEY)
+    if provider == "openai":
+        return bool(OPENAI_API_KEY)
+    if provider == "anthropic":
+        return bool(ANTHROPIC_API_KEY)
+    return False
+
+
+def _resolve_provider_preferences() -> List[str]:
+    preferred: List[str] = []
+    if VISION_PREFERRED_PROVIDER:
+        preferred = [
+            _canonical_provider_name(token)
+            for token in VISION_PREFERRED_PROVIDER.split(",")
+        ]
+        preferred = [token for token in preferred if token]
+
+    default_order = ["gemini", "openai", "anthropic"]
+    order: List[str] = []
+
+    for token in preferred + default_order:
+        if token and token not in order and _provider_available(token):
+            order.append(token)
+
+    return order
+
+
+async def _invoke_vision_provider(
+    provider_order: List[str], image_path_or_url: str, prompt: str
+) -> Optional[str]:
+    last_error: Optional[str] = None
+
+    for provider in provider_order:
+        if provider == "gemini":
+            result = await call_gemini_vision(image_path_or_url, prompt)
+        elif provider == "openai":
+            result = await call_openai_vision(image_path_or_url, prompt)
+        elif provider == "anthropic":
+            result = await call_claude_vision(image_path_or_url, prompt)
+        else:
+            continue
+
+        if result and not str(result).startswith("[ERROR]"):
+            return result
+
+        last_error = result
+
+    return last_error
+
+
+async def _download_youtube_audio(url: str) -> tuple[str, str]:
+    """Download YouTube audio to a temporary directory using yt_dlp."""
+
+    temp_dir = tempfile.mkdtemp(prefix="vision_yt_")
+    output_template = os.path.join(temp_dir, "%(id)s.%(ext)s")
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "outtmpl": output_template,
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+    def _download():
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            return ydl.prepare_filename(info)
+
+    try:
+        file_path = await asyncio.to_thread(_download)
+        return file_path, temp_dir
+    except Exception:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
+
+
+async def _transcribe_audio(audio_path: str) -> str:
+    client = _get_whisper_client()
+    if client is None:
+        return "[ERROR]: No transcription-capable API key configured for YouTube analysis."
+
+    model = (
+        OPENAI_WHISPER_MODEL
+        if OPENAI_WHISPER_API_KEY
+        else OPENROUTER_TRANSCRIPTION_MODEL
+    )
+
+    try:
+        with open(audio_path, "rb") as audio_file:
+            response = client.audio.transcriptions.create(
+                model=model,
+                file=audio_file,
+            )
+    except Exception as e:
+        return f"[ERROR]: Failed to transcribe audio: {e}"
+
+    return response.text
+
+
+async def _answer_question_from_transcript(transcript: str, question: str) -> str:
+    prompt = (
+        "You are a helpful assistant analyzing a YouTube video transcript.\n"
+        "Transcript:\n"
+        f"{transcript}\n\n"
+        f"Question: {question}\n"
+        "Provide a concise, evidence-based answer grounded in the transcript."
+    )
+
+    # Prefer OpenRouter Gemini, fall back to provider-specific clients
+    openrouter_client = _get_openrouter_client()
+    if openrouter_client is not None:
+        try:
+            response = openrouter_client.chat.completions.create(
+                model=OPENROUTER_GEMINI_MODEL,
+                messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+                max_tokens=2048,
+            )
+            content = response.choices[0].message.content
+            if content and content.strip():
+                return content
+        except Exception as e:
+            return f"[ERROR]: Gemini (OpenRouter) failed to answer: {e}"
+
+    if OPENAI_API_KEY:
+        try:
+            client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+            response = client.chat.completions.create(
+                model=OPENAI_MODEL_NAME,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=2048,
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            return f"[ERROR]: OpenAI vision fallback failed: {e}"
+
+    if ANTHROPIC_API_KEY:
+        try:
+            client = Anthropic(api_key=ANTHROPIC_API_KEY, base_url=ANTHROPIC_BASE_URL)
+            response = client.messages.create(
+                model=ANTHROPIC_MODEL_NAME,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.content[-1].text
+        except Exception as e:
+            return f"[ERROR]: Anthropic fallback failed: {e}"
+
+    return "[ERROR]: No available model to answer the question from transcript."
 
 
 @mcp.tool()
@@ -301,14 +502,15 @@ Remember: Your extraction will be used by someone who cannot see the image thems
 
 Return only the extracted text content, maintaining the original formatting and structure as much as possible. If there is no text in the image, respond with 'No text found'. If there are areas where text may exist but is unreadable or ambiguous, describe these as well."""
 
-    if ANTHROPIC_API_KEY:
-        ocr_result = await call_claude_vision(image_path_or_url, ocr_prompt)
-    elif OPENAI_API_KEY:
-        ocr_result = await call_openai_vision(image_path_or_url, ocr_prompt)
-    elif GEMINI_API_KEY:
-        ocr_result = await call_gemini_vision(image_path_or_url, ocr_prompt)
-    else:
+    provider_order = _resolve_provider_preferences()
+    if not provider_order:
         return "[ERROR]: No API key is set, visual_question_answering tool is not available."
+
+    ocr_result = await _invoke_vision_provider(
+        provider_order, image_path_or_url, ocr_prompt
+    )
+    if not ocr_result or ocr_result.startswith("[ERROR]"):
+        return ocr_result or "[ERROR]: No API key is set, visual_question_answering tool is not available."
 
     vqa_prompt = f"""You are a highly attentive visual analysis assistant. Your task is to carefully examine the image and provide a thorough, accurate answer to the question.
 
@@ -332,14 +534,11 @@ Please provide a comprehensive analysis that demonstrates careful observation an
 """
     # Before answering, carefully analyze both the question and the image. Identify and briefly list potential subtle or easily overlooked VQA pitfalls or ambiguities that could arise in interpreting this question or image (e.g., confusing similar objects, missing small details, misreading text, ambiguous context, etc.). For each, suggest a method or strategy to avoid or mitigate these issues. Only after this analysis, proceed to answer the question, providing a thorough and detailed observation and reasoning process.
 
-    if ANTHROPIC_API_KEY:
-        vqa_result = await call_claude_vision(image_path_or_url, vqa_prompt)
-    elif OPENAI_API_KEY:
-        vqa_result = await call_openai_vision(image_path_or_url, vqa_prompt)
-    elif GEMINI_API_KEY:
-        vqa_result = await call_gemini_vision(image_path_or_url, vqa_prompt)
-    else:
-        return "[ERROR]: No API key is set, visual_question_answering tool is not available."
+    vqa_result = await _invoke_vision_provider(
+        provider_order, image_path_or_url, vqa_prompt
+    )
+    if not vqa_result or vqa_result.startswith("[ERROR]"):
+        return vqa_result or "[ERROR]: No API key is set, visual_question_answering tool is not available."
 
     return f"OCR results:\n{ocr_result}\n\nVQA result:\n{vqa_result}"
 
@@ -372,138 +571,39 @@ async def visual_audio_youtube_analyzing(
     if question == "" and not provide_transcribe:
         return "[ERROR]: You must provide a question to ask about the video content or set provide_transcribe to True."
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    try:
+        local_audio_path, temp_dir = await _download_youtube_audio(url)
+    except Exception as e:
+        return f"[ERROR]: Failed to download YouTube audio: {e}"
+
+    try:
+        transcript = await _transcribe_audio(local_audio_path)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    if isinstance(transcript, str) and transcript.startswith("[ERROR]"):
+        return transcript
+
+    sections = []
     if provide_transcribe:
-        # prompt from GEMINI official document
-        prompt = "Transcribe the audio from this video, giving timestamps for salient events in the video. Also provide visual descriptions."
-        retry_count = 0
-        max_retry = 3  # 3 retries with smart timing to avoid thundering herd
-        while retry_count <= max_retry:
-            try:
-                transcribe_response = client.models.generate_content(
-                    model="gemini-2.5-pro",
-                    contents=types.Content(
-                        parts=[
-                            types.Part(file_data=types.FileData(file_uri=url)),
-                            types.Part(text=prompt),
-                        ]
-                    ),
-                )
+        sections.append(f"Transcription:\n\n{transcript}\n")
 
-                # Check if response.text is None or empty after stripping
-                if (
-                    transcribe_response.text is None
-                    or transcribe_response.text.strip() == ""
-                ):
-                    raise Exception("Response text is None or empty")
+    if question:
+        answer = await _answer_question_from_transcript(transcript, question)
+        sections.append(
+            "Answer:\n\n" + answer
+            if answer.strip()
+            else "[ERROR]: Failed to generate an answer from the transcript."
+        )
 
-                transcribe_content = (
-                    "Transcription:\n\n" + transcribe_response.text + "\n\n"
-                )
-                break
-            except Exception as e:
-                # Handle 400 error specifically for video length issues
-                if "exceeds the maximum number of tokens" in str(e):
-                    transcribe_content = f"[ERROR]: Failed to transcribe the video: {str(e)}. This is due to the video being too long to process."
-                    break
-                # Only 503 error need to retry, or empty response
-                elif (
-                    "400" in str(e)
-                    or "503" in str(e)
-                    or "429" in str(e)
-                    or "500" in str(e)
-                    or "Response text is None or empty" in str(e)
-                ):
-                    retry_count += 1
-                    if retry_count > max_retry:
-                        transcribe_content = f"[ERROR]: Failed to transcribe the video after {retry_count} retries: {str(e)}"
-                        break
+    if not sections:
+        sections.append("[INFO]: No content generated. Provide a question or set provide_transcribe=true.")
 
-                    # Rate limit is per minute, spread 5 requests across different minute windows
-                    if retry_count == 1:
-                        # First retry: wait 60-300 seconds to spread across 4 minute windows
-                        wait_time = random.randint(60, 300)
-                    elif retry_count == 2:
-                        # Second retry: wait 60-180 seconds to try different window
-                        wait_time = random.randint(60, 180)
-                    else:
-                        # Third retry: fixed 60 seconds - ensure crossing minute boundary
-                        wait_time = 60
-
-                    await asyncio.sleep(wait_time)
-                else:
-                    transcribe_content = (
-                        f"[ERROR]: Failed to transcribe the video: {str(e)}"
-                    )
-                    break
-    else:
-        transcribe_content = ""
-
-    answer_content = ""
-    if question != "":
-        prompt = f"Answer the following question: {question}"
-        retry_count = 0
-        max_retry = 3  # 3 retries with smart timing to avoid thundering herd
-        while retry_count <= max_retry:
-            try:
-                response = client.models.generate_content(
-                    model="gemini-2.5-pro",
-                    contents=types.Content(
-                        parts=[
-                            types.Part(file_data=types.FileData(file_uri=url)),
-                            types.Part(text=prompt),
-                        ]
-                    ),
-                )
-
-                # Check if response.text is None or empty after stripping
-                if response.text is None or response.text.strip() == "":
-                    raise Exception("Response text is None or empty")
-
-                answer_content = (
-                    "Answer of the question: "
-                    + question
-                    + "\n\n"
-                    + response.text
-                    + "\n\n"
-                )
-                break
-            except Exception as e:
-                # Handle 400 error specifically for video length issues
-                if "exceeds the maximum number of tokens" in str(e):
-                    transcribe_content = f"[ERROR]: Failed to transcribe the video: {str(e)}. This is due to the video being too long to process."
-                    break
-                # Only 503 error need to retry, or empty response
-                elif (
-                    "400" in str(e)
-                    or "503" in str(e)
-                    or "429" in str(e)
-                    or "500" in str(e)
-                    or "Response text is None or empty" in str(e)
-                ):
-                    retry_count += 1
-                    if retry_count > max_retry:
-                        answer_content = f"[ERROR]: Failed to answer the question after {retry_count} retries: {str(e)}"
-                        break
-
-                    # Rate limit is per minute, spread 5 requests across different minute windows
-                    if retry_count == 1:
-                        # First retry: wait 60-300 seconds to spread across 4 minute windows
-                        wait_time = random.randint(60, 300)
-                    elif retry_count == 2:
-                        # Second retry: wait 60-180 seconds to try different window
-                        wait_time = random.randint(60, 180)
-                    else:
-                        # Third retry: fixed 60 seconds - ensure crossing minute boundary
-                        wait_time = 60
-
-                    await asyncio.sleep(wait_time)
-                else:
-                    answer_content = f"[ERROR]: Failed to answer the question: {str(e)}"
-                    break
-
-    hint = "\n\nHint: Large videos may trigger rate limits causing failures. If you need more website information rather than video visual content itself (such as video subtitles, titles, descriptions, key moments), you can also call tool `scrape_website` tool."
-    return transcribe_content + answer_content + hint
+    hint = (
+        "\n\nHint: Large videos may trigger rate limits. Consider using `scrape_website` for"
+        " supplementary metadata (descriptions, subtitles, etc.)."
+    )
+    return "\n\n".join(sections) + hint
 
 
 if __name__ == "__main__":

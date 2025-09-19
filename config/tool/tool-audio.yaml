@@ -5,7 +5,7 @@ args:
   - "src.tool.mcp_servers.audio_mcp_server"
 env:
 # Audio processing API configuration - these values will be loaded from the .env file at runtime
-  OPENAI_API_KEY: "${oc.env:OPENAI_API_KEY}"
-  OPENAI_BASE_URL: "${oc.env:OPENAI_BASE_URL,https://api.openai.com/v1}"
-  OPENAI_TRANSCRIPTION_MODEL_NAME: "${oc.env:OPENAI_TRANSCRIPTION_MODEL_NAME,gpt-4o-mini-transcribe}"
-  OPENAI_AUDIO_MODEL_NAME: "${oc.env:OPENAI_AUDIO_MODEL_NAME,gpt-4o-audio-preview}"
+  OPENAI_API_KEY: "${oc.env:OPENROUTER_API_KEY}"
+  OPENAI_BASE_URL: "${oc.env:OPENROUTER_BASE_URL,https://openrouter.ai/api/v1}"
+  OPENAI_TRANSCRIPTION_MODEL_NAME: "${oc.env:OPENAI_TRANSCRIPTION_MODEL_NAME,openai/gpt-4o-mini-transcribe}"
+  OPENAI_AUDIO_MODEL_NAME: "${oc.env:OPENAI_AUDIO_MODEL_NAME,openai/gpt-4o-audio-preview}"

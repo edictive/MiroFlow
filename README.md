@@ -170,6 +170,13 @@ Yes, MiroFlow supports various language models. Check our documentation for conf
 </details>
 
 <details>
+<summary><strong>How do I capture console logs from a run?</strong></summary>
+<br>
+All commands executed through `main.py` now mirror console output to timestamped files under `logs/`.
+Set `LOGGER_DIR` in your environment (or `.env`) to change the folder, or `LOGGER_FILE` to point to an exact file path.
+</details>
+
+<details>
 <summary><strong>How do I reproduce the benchmark results?</strong></summary>
 <br>
 Follow our detailed <a href="https://miromindai.github.io/MiroFlow/evaluation_overview/">Benchmarks Documentation</a> for step-by-step reproduction guides.

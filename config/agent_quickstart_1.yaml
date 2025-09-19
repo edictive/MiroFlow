@@ -8,7 +8,7 @@ main_agent:
   prompt_class: MainAgentPromptBoxedAnswer
   llm: 
     provider_class: "ClaudeOpenRouterClient"
-    model_name: "anthropic/claude-3.7-sonnet"
+    model_name: "anthropic/claude-sonnet-4"
     async_client: true
     temperature: 0.3
     top_p: 0.95
@@ -43,7 +43,7 @@ sub_agents:
     prompt_class: SubAgentWorkerPrompt
     llm: 
       provider_class: "ClaudeOpenRouterClient"
-      model_name: "anthropic/claude-3.7-sonnet"
+      model_name: "anthropic/claude-sonnet-4"
       async_client: true
       temperature: 0.3
       top_p: 0.95

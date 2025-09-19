@@ -110,12 +110,48 @@ class BenchmarkEvaluator(ABC):
         self.data_dir = Path(data_dir)
         self.benchmark_name = benchmark_name
         self.cfg = cfg
-        self.pass_at_k = cfg.benchmark.execution.get("pass_at_k", 1)
+        execution_cfg = cfg.benchmark.execution
+
+        if execution_cfg.max_tasks is not None:
+            try:
+                execution_cfg.max_tasks = int(execution_cfg.max_tasks)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"benchmark.execution.max_tasks must be an integer, got {execution_cfg.max_tasks!r}"
+                )
+
+        try:
+            execution_cfg.max_concurrent = int(execution_cfg.max_concurrent)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"benchmark.execution.max_concurrent must be an integer, got {execution_cfg.max_concurrent!r}"
+            )
+
+        try:
+            execution_cfg.pass_at_k = int(execution_cfg.pass_at_k)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"benchmark.execution.pass_at_k must be an integer, got {execution_cfg.pass_at_k!r}"
+            )
+
+        self.pass_at_k = execution_cfg.pass_at_k
         self.output_dir = Path(cfg.output_dir).absolute()
         if not self.output_dir.exists():
             os.makedirs(self.output_dir, exist_ok=True)
             print(f"Created output directory: {self.output_dir}")
-        self.evaluation_llm = openai.AsyncOpenAI(api_key=cfg.benchmark.openai_api_key)
+
+        self.evaluation_llm = None
+        self.evaluation_model_name = cfg.benchmark.get("openai_model_name")
+        evaluation_api_key = cfg.benchmark.get("openai_api_key", "skip_evaluation")
+        if evaluation_api_key and evaluation_api_key != "skip_evaluation":
+            client_kwargs: dict[str, Any] = {"api_key": evaluation_api_key}
+            evaluation_base_url = cfg.benchmark.get("openai_base_url")
+            if evaluation_base_url:
+                client_kwargs["base_url"] = evaluation_base_url
+            self.evaluation_llm = openai.AsyncOpenAI(**client_kwargs)
+        else:
+            self.evaluation_model_name = None
+
         self.tasks: List[BenchmarkTask] = []
         self.results: List[BenchmarkResult] = []
 
@@ -242,6 +278,7 @@ class BenchmarkEvaluator(ABC):
                             question=task.task_question,
                             target=task.ground_truth,
                             predicted_answer=attempt_result["model_boxed_answer"],
+                            judge_model_name=self.evaluation_model_name,
                         )
                         attempt_result["judge_result"] = evaluation_result
                         attempt_result["is_correct"] = evaluation_result == "CORRECT"
