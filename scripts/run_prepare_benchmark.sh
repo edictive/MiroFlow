@@ -13,12 +13,13 @@ fi
 echo "Access confirmed"
 
 # Comment out any unwanted datasets by adding # at the start of the line
-uv run main.py prepare-benchmark get gaia-val
-uv run main.py prepare-benchmark get gaia-val-text-only
-uv run main.py prepare-benchmark get frames-test
-uv run main.py prepare-benchmark get webwalkerqa
-uv run main.py prepare-benchmark get browsecomp-test
-uv run main.py prepare-benchmark get browsecomp-zh-test
-uv run main.py prepare-benchmark get hle
-uv run main.py prepare-benchmark get xbench-ds
+# uv run main.py prepare-benchmark get gaia-val
+# uv run main.py prepare-benchmark get gaia-val-text-only
+# uv run main.py prepare-benchmark get frames-test
+# uv run main.py prepare-benchmark get webwalkerqa
+# uv run main.py prepare-benchmark get browsecomp-test
+# uv run main.py prepare-benchmark get browsecomp-zh-test
+# uv run main.py prepare-benchmark get hle
+# uv run main.py prepare-benchmark get xbench-ds
 uv run main.py prepare-benchmark get futurex
+uv run main.py prepare-benchmark get futurex-past

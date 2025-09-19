@@ -19,6 +19,7 @@ from utils.prepare_benchmark.gen_hle import gen_hle_test
 from utils.prepare_benchmark.gen_webwalkerqa import gen_webwalkerqa
 from utils.prepare_benchmark.gen_xbench_ds import gen_xbench_ds
 from utils.prepare_benchmark.gen_futurex import gen_futurex
+from utils.prepare_benchmark.gen_futurex_past import gen_futurex_past
 
 
 @dataclasses.dataclass
@@ -33,6 +34,7 @@ class _Env:
         "hle",
         "xbench-ds",
         "futurex",
+        "futurex-past",
     )
     meta_filename = "standardized_data.jsonl"
     data_dir: pathlib.Path
@@ -115,6 +117,13 @@ def _prepare_dataset(env: _Env, dataset: str):
 
             def gen():
                 for x in gen_futurex(env.hf_token):
+                    yield x
+
+            return gen
+        case "futurex-past":
+
+            def gen():
+                for x in gen_futurex_past(env.hf_token):
                     yield x
 
             return gen
