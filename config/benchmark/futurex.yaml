@@ -12,7 +12,7 @@ data:
 
 execution:
   max_tasks: null      # null = no limit, or specify a number
-  max_concurrent: 5    # Number of parallel tasks
+  max_concurrent: ${oc.env:BENCHMARK_MAX_CONCURRENT,50}    # Number of parallel tasks
   pass_at_k: 1         # Number of attempts per task
 
 # Reuse OpenRouter via the same API key and specify model/base URL for judging
