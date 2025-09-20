@@ -33,6 +33,7 @@ dependencies = [
     "ipykernel>=6.30.1",
     "matplotlib>=3.10.6",
     "seaborn>=0.13.2",
+    "networkx>=3.5",
 ]
 
 [build-system]
