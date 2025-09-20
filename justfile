@@ -29,4 +29,33 @@ insert-license:
 
 # run precommit before PR
 [group('precommit')]
-precommit: lint format pytest check-licence
+precommit: lint format pytest check-license
+
+# prepare futurex datasets
+[group('data')]
+prepare-data dataset="futurex-past":
+    uv run main.py prepare-benchmark get {{dataset}}
+
+# test single task with specified model and dataset
+[group('test')]
+test-1-task model="qwen/qwen3-30b-a3b" dataset="futurex-past":
+    uv run main.py common-benchmark \
+      --config_file_name=config \
+      benchmark=futurex \
+      benchmark.data.data_dir=data/{{dataset}} \
+      benchmark.execution.max_tasks=1 \
+      main_agent.llm.model_name="{{model}}" \
+      sub_agents.agent-worker.llm.model_name="{{model}}" \
+      output_dir="logs/{{dataset}}-test1/$(date +%Y%m%d_%H%M%S)"
+
+# test 10 tasks with specified model and dataset
+[group('test')]
+test-10-tasks model="qwen/qwen3-30b-a3b" dataset="futurex-past":
+    uv run main.py common-benchmark \
+      --config_file_name=config \
+      benchmark=futurex \
+      benchmark.data.data_dir=data/{{dataset}} \
+      benchmark.execution.max_tasks=10 \
+      main_agent.llm.model_name="{{model}}" \
+      sub_agents.agent-worker.llm.model_name="{{model}}" \
+      output_dir="logs/{{dataset}}-test10/$(date +%Y%m%d_%H%M%S)"

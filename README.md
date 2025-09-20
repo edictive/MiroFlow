@@ -139,6 +139,25 @@ uv run main.py trace --config_file_name=agent_quickstart_1 --task="What is the f
 
 Follow our detailed guides to reproduce benchmark results in our [Benchmarks Documentation](https://miromindai.github.io/MiroFlow/evaluation_overview/)
 
+## ⚡ Quick Commands with Just
+
+For convenience, we've added shortcuts using [just](https://github.com/casey/just) (install with `cargo install just`):
+
+```bash
+# Prepare datasets
+just prepare-data futurex-past    # or futurex
+just prepare-data futurex
+
+# Test with different models and datasets
+just test-1-task                                          # Uses defaults: qwen3-30b-a3b, futurex-past
+just test-1-task "alibaba/qwen-3-4b-a14b-thinking"      # Custom model, default dataset
+just test-1-task "qwen/qwen3-30b-a3b" "futurex"         # Custom model and dataset (futurex-online)
+just test-10-tasks "anthropic/claude-sonnet-4" "futurex-past"  # 10 tasks with Claude on futurex-past
+
+# See all commands
+just --list
+```
+
 # 🤖 MiroFlow: AI Agentic Foundation Framework
 
 MiroFlow is a high-performance, modular framework for building intelligent AI agents that deliver state-of-the-art results on complex reasoning tasks. The framework features advanced multi-turn conversation capabilities, extensive tool ecosystem integration, and hierarchical sub-agent orchestration for optimal task completion. Learn more about our agent [workflow architecture](https://miromindai.github.io/MiroFlow/core_concepts/).
