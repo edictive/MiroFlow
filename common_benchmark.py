@@ -25,6 +25,7 @@ from src.core.pipeline import (
     create_pipeline_components,
     execute_task_pipeline,
 )
+from src.utils.cost_tracker import create_cost_tracker_from_config, BenchmarkCostTracker
 
 
 class TaskStatus(StrEnum):
@@ -263,6 +264,7 @@ class BenchmarkEvaluator(ABC):
                             ground_truth=task.ground_truth,
                             log_path=self.output_dir
                             / f"task_{task.task_id}_attempt_{attempt}.json",
+                            benchmark_cost_tracker=self.benchmark_cost_tracker,
                         )
 
                         attempt_result["model_response"] = response if response else ""
@@ -633,6 +635,13 @@ async def entrypoint(cfg: DictConfig) -> float:
     """
     print("Benchmark configuration:\n", OmegaConf.to_yaml(cfg, resolve=True))
 
+    # Initialize benchmark cost tracking
+    cost_tracker = create_cost_tracker_from_config(cfg)
+    benchmark_cost_tracker = None
+    if cost_tracker:
+        benchmark_cost_tracker = BenchmarkCostTracker(cost_tracker)
+        await benchmark_cost_tracker.start_benchmark()
+
     def parse_func(x: str) -> BenchmarkTask:
         data = json.loads(x)
         return BenchmarkTask(
@@ -657,6 +666,9 @@ async def entrypoint(cfg: DictConfig) -> float:
         parse_func=parse_func,
         filter_func=filter_func,
     )
+
+    # Set benchmark cost tracker on evaluator
+    evaluator.benchmark_cost_tracker = benchmark_cost_tracker
 
     """
     Run the full benchmark evaluation process
@@ -700,6 +712,21 @@ async def entrypoint(cfg: DictConfig) -> float:
     )
     with open(accuracy_file, "w") as f:
         f.write(f"{accuracy:.2%}")
+
+    # Finalize benchmark cost tracking
+    if benchmark_cost_tracker:
+        benchmark_cost_measurement = await benchmark_cost_tracker.end_benchmark()
+        cost_summary = benchmark_cost_tracker.get_cost_summary()
+
+        # Save cost summary to file
+        cost_file = results_path.parent / f"{results_path.stem}_cost_summary.json"
+        with open(cost_file, "w") as f:
+            json.dump(cost_summary, f, indent=2)
+
+        if benchmark_cost_measurement:
+            print(f"\nBenchmark total cost: ${benchmark_cost_measurement.cost_dollars:.6f}")
+            print(f"Average cost per task: ${cost_summary['avg_cost_per_task']:.6f}")
+            print(f"Cost summary saved to: {cost_file}")
 
     return accuracy
 
