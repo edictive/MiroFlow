@@ -216,3 +216,5 @@ tmp/
 
 debug.py
 **/debug.py
+
+.claude
