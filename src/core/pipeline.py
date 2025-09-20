@@ -16,6 +16,7 @@ from src.core.orchestrator import Orchestrator
 from src.tool.manager import ToolManager
 from src.utils.io_utils import OutputFormatter
 from src.utils.tool_utils import create_mcp_server_parameters
+from src.utils.cost_tracker import create_cost_tracker_from_config
 
 LOGGER_LEVEL = os.getenv("LOGGER_LEVEL", "INFO")
 logger = bootstrap_logger(level=LOGGER_LEVEL)
@@ -33,6 +34,7 @@ async def execute_task_pipeline(
     log_path: pathlib.Path,
     task_metadata: dict[str, Any] | None = None,
     ground_truth: str | None = None,
+    benchmark_cost_tracker: Any | None = None,
 ) -> tuple[str, str, pathlib.Path]:
     """
     Executes the full pipeline for a single task.
@@ -46,7 +48,8 @@ async def execute_task_pipeline(
         sub_agent_tool_managers: A dictionary of initialized sub-agent ToolManager instances.
         output_formatter: An initialized OutputFormatter instance.
         ground_truth: The ground truth for the task (optional).
-        log_dir: The directory to save the task log (default: "logs").
+        log_path: The path to save the task log.
+        benchmark_cost_tracker: The benchmark cost tracker to add task costs to (optional).
 
     Returns:
         A tuple containing:
@@ -55,6 +58,10 @@ async def execute_task_pipeline(
         - The path to the log file.
     """
     logger.debug(f"Starting Task Execution: {task_id}")
+
+    # Initialize cost tracking
+    cost_tracker = create_cost_tracker_from_config(cfg)
+    task_cost_measurement = None
 
     # Create task log
     task_input = {
@@ -118,11 +125,23 @@ async def execute_task_pipeline(
         )
 
         task_log.status = "running"
-        final_answer, final_boxed_answer = await orchestrator.run_main_agent(
-            task_description=task_description,
-            task_file_name=task_file_name,
-            task_id=task_id,
-        )
+
+        # Execute main task with cost tracking
+        if cost_tracker:
+            async def run_task():
+                return await orchestrator.run_main_agent(
+                    task_description=task_description,
+                    task_file_name=task_file_name,
+                    task_id=task_id,
+                )
+
+            (final_answer, final_boxed_answer), task_cost_measurement = await cost_tracker.measure_cost_async(run_task())
+        else:
+            final_answer, final_boxed_answer = await orchestrator.run_main_agent(
+                task_description=task_description,
+                task_file_name=task_file_name,
+                task_id=task_id,
+            )
 
         task_log.final_boxed_answer = final_boxed_answer
         task_log.status = "completed"
@@ -152,13 +171,64 @@ async def execute_task_pipeline(
             sub_agent_llm_client.close()
         task_log.end_time = datetime.now()
 
+        # Add cost information to task log
+        if task_cost_measurement:
+            task_log.cost_measurement = task_cost_measurement.to_dict()
+            logger.info(f"Task {task_id} cost: ${task_cost_measurement.cost_dollars:.6f}")
+
+            # Add task cost to benchmark cost tracker
+            if benchmark_cost_tracker:
+                benchmark_cost_tracker.add_task_cost(task_id, task_cost_measurement)
+
+        # Generate and display comprehensive task summary
+        summary = task_log.generate_summary()
+        summary_data = summary["task_execution_summary"]
+
+        # Format and display the summary
+        print(f"\n{'='*60}")
+        print(f"🎯 TASK EXECUTION SUMMARY - {task_id}")
+        print(f"{'='*60}")
+        print(f"📊 Status: {summary_data['status'].upper()}")
+        print(f"⏱️  Duration: {summary_data['duration_seconds']:.1f}s ({summary_data['duration_minutes']:.1f}m)")
+
+        # Main agent stats
+        main_stats = summary_data['main_agent']
+        print(f"🤖 Main Agent: {main_stats['turns']} turns, {main_stats['tool_calls']} tool calls")
+
+        # Sub-agent stats
+        sub_stats = summary_data['sub_agents']
+        if sub_stats['total_sessions'] > 0:
+            print(f"👥 Sub-Agents: {sub_stats['total_sessions']} sessions")
+            for session_id, details in sub_stats['session_details'].items():
+                print(f"    └─ {session_id}: {details['turns']} turns, {details['messages']} messages")
+        else:
+            print(f"👥 Sub-Agents: 0 sessions")
+
+        # Cost information
+        cost_info = summary_data['cost']
+        if cost_info:
+            print(f"💰 Cost: ${cost_info['total_cost']:.6f} (${cost_info['cost_per_second']:.6f}/sec)")
+
+        # Step breakdown (chronological order)
+        if summary_data['step_breakdown']:
+            print(f"📝 Step Breakdown:")
+            for step_type, count in summary_data['step_breakdown'].items():
+                print(f"    └─ {step_type}: {count}")
+
+        # Final answer
+        if summary_data['final_answer']:
+            print(f"✅ Final Answer: {summary_data['final_answer']}")
+
+        if summary_data['has_error']:
+            print(f"❌ Has Errors: Yes")
+
+        print(f"{'='*60}\n")
+
         # Record task summary to structured log
         task_log.log_step(
             "task_execution_finished",
             f"Task {task_id} execution completed with status: {task_log.status}",
-        )
-        task_log.log_step(
-            "console_summary_display", "Displaying task summary to console"
+            metadata=summary_data
         )
         task_log.save()
         logger.debug(f"--- Finished Task Execution: {task_id} ---")
