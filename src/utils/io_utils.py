@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import re
 
 from src.logging.logger import bootstrap_logger
 
@@ -116,6 +117,20 @@ class OutputFormatter:
 
         return matches[-1] if matches else ""
 
+    def _sanitize_boxed_answer(self, content: str) -> str:
+        """Normalize boxed answers to a single canonical prediction."""
+        if not content:
+            return ""
+
+        stripped = content.strip()
+        if not stripped:
+            return ""
+
+        tokens = [part.strip() for part in re.split(r"[,\n]+", stripped) if part.strip()]
+        if tokens:
+            return tokens[0]
+        return stripped
+
     def format_tool_result_for_user(self, tool_call_execution_result):
         """
         Format tool execution results to be fed back to LLM as user messages.
@@ -154,6 +169,7 @@ class OutputFormatter:
         summary_lines.append("\n" + "-" * 20 + " Extracted Result " + "-" * 20)
 
         if boxed_result:
+            boxed_result = self._sanitize_boxed_answer(boxed_result)
             summary_lines.append(boxed_result)
         elif final_answer_text:
             summary_lines.append("No \\boxed{} content found.")
