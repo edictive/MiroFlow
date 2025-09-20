@@ -159,6 +159,7 @@ class BenchmarkEvaluator(ABC):
             if title:
                 default_headers["X-Title"] = title
             if default_headers:
+                print(f"Evaluation judge headers: {default_headers}")
                 client_kwargs["default_headers"] = default_headers
 
             self.evaluation_llm = openai.AsyncOpenAI(**client_kwargs)
