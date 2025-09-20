@@ -9,6 +9,7 @@ data:
   data_dir: "${data_dir}/futurex"  # Path to your dataset
   metadata_file: "standardized_data.jsonl"  # Metadata filename
   whitelist: []  # Optional: List of specific task_ids to run
+  level_filter: null  # Filter by level (1-4), null means no filter
 
 execution:
   max_tasks: null      # null = no limit, or specify a number

@@ -653,10 +653,19 @@ async def entrypoint(cfg: DictConfig) -> float:
         )
 
     def filter_func(x: BenchmarkTask) -> bool:
+        # Apply whitelist filter
         if len(cfg.benchmark.data.whitelist) > 0:
-            return x.task_id in cfg.benchmark.data.whitelist
-        else:
-            return True
+            if x.task_id not in cfg.benchmark.data.whitelist:
+                return False
+
+        # Apply level filter
+        level_filter = cfg.benchmark.data.get('level_filter', None)
+        if level_filter is not None:
+            task_level = x.metadata.get('level', None)
+            if task_level != level_filter:
+                return False
+
+        return True
 
     evaluator = JSONLDatasetEvaluator(
         data_dir=cfg.benchmark.data.data_dir,
