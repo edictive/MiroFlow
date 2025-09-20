@@ -6,6 +6,7 @@ import pathlib
 import traceback
 import os
 from datetime import datetime
+from typing import Any
 from omegaconf import DictConfig
 
 from src.llm.client import LLMClient
@@ -30,6 +31,7 @@ async def execute_task_pipeline(
     sub_agent_tool_managers: dict[str, ToolManager],
     output_formatter: OutputFormatter,
     log_path: pathlib.Path,
+    task_metadata: dict[str, Any] | None = None,
     ground_truth: str | None = None,
 ) -> tuple[str, str, pathlib.Path]:
     """
@@ -55,13 +57,20 @@ async def execute_task_pipeline(
     logger.debug(f"Starting Task Execution: {task_id}")
 
     # Create task log
+    task_input = {
+        "task_description": task_description,
+        "task_file_name": task_file_name,
+    }
+    if task_metadata is not None:
+        task_input["task_metadata"] = task_metadata
+
     task_log = TaskTracer(
         log_path=log_path,
         task_name=task_name,
         task_id=task_id,
         task_file_name=task_file_name,
         ground_truth=ground_truth,
-        input={"task_description": task_description, "task_file_name": task_file_name},
+        input=task_input,
     )
 
     main_agent_llm_client = None
@@ -105,6 +114,7 @@ async def execute_task_pipeline(
             output_formatter=output_formatter,
             task_log=task_log,
             cfg=cfg,
+            task_metadata=task_metadata,
         )
 
         task_log.status = "running"

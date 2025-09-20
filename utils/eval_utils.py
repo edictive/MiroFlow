@@ -2,6 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 import re
 import string
 import warnings
@@ -116,7 +117,9 @@ async def verify_answer_llm_simpleqa(
     CHOICE_MAP = {"A": "CORRECT", "B": "INCORRECT", "C": "NOT_ATTEMPTED"}
 
     llm_response = await openai_client.chat.completions.create(
-        model=model_name or "gpt-4o-mini", messages=messages, max_completion_tokens=2
+        model=model_name or "qwen/qwen3-next-80b-a3b-thinking",
+        messages=messages,
+        max_completion_tokens=16,
     )
     content = llm_response.choices[0].message.content
     match = re.search(r"(A|B|C)", content)
@@ -154,6 +157,21 @@ class XBenchExtractedAnswer(BaseModel):
 
 
 @retry(wait=wait_exponential(multiplier=5), stop=stop_after_attempt(5))
+def _extract_json_dict(text: str) -> dict[str, Any]:
+    """Extract JSON object from text and return parsed dict."""
+    if not text:
+        raise ValueError("Empty response from judge")
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if match:
+            candidate = match.group(0)
+            return json.loads(candidate)
+        raise
+
+
 async def verify_answer_llm_xbench(
     openai_client: AsyncOpenAI,
     question: str,
@@ -177,27 +195,36 @@ async def verify_answer_llm_xbench(
         question=question, correct_answer=target, response=predicted_answer
     )
 
-    response = await openai_client.beta.chat.completions.parse(
-        model=model_name or "o3",
-        max_completion_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-        response_format=XBenchExtractedAnswer,
+    system_prompt = (
+        "You are a strict evaluator. Respond ONLY with valid JSON containing the keys 'final_answer', 'reasoning', and 'verdict'."
     )
 
-    content = response.choices[0].message.parsed
+    response = await openai_client.chat.completions.create(
+        model=model_name or "qwen/qwen3-next-80b-a3b-thinking",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        max_completion_tokens=512,
+    )
 
-    # Print XBench reasoning
-    print(f"XBench LLM Judge Extracted Answer: {content.最终答案}")
-    print(f"XBench LLM Judge Reasoning: {content.解释}")
-    print(f"XBench LLM Judge Result: {content.结论}")
+    content_raw = response.choices[0].message.content
+    data = _extract_json_dict(content_raw)
 
-    # Convert XBench format to eval_utils format
-    if content.结论 == "正确":
+    final_answer = data.get("final_answer", "")
+    reasoning = data.get("reasoning", "")
+    verdict = data.get("verdict", "")
+
+    print(f"XBench LLM Judge Extracted Answer: {final_answer}")
+    print(f"XBench LLM Judge Reasoning: {reasoning}")
+    print(f"XBench LLM Judge Result: {verdict}")
+
+    if verdict in ("正确", "CORRECT", "YES", "yes", "correct"):
         return "CORRECT"
-    elif content.结论 == "错误":
+    elif verdict in ("错误", "INCORRECT", "NO", "no", "incorrect"):
         return "INCORRECT"
     else:
-        raise Exception(f"XBench LLM evaluation failed: {content}")
+        raise Exception(f"XBench LLM evaluation failed: {data}")
 
 
 # HLE Judge prompt and model
@@ -252,27 +279,36 @@ async def verify_answer_llm_hle(
         question=question, correct_answer=target, response=predicted_answer
     )
 
-    response = await openai_client.beta.chat.completions.parse(
-        model=model_name or "o3-mini-2025-01-31",
-        max_completion_tokens=4096,
-        messages=[{"role": "user", "content": prompt}],
-        response_format=HLEExtractedAnswer,
+    system_prompt = (
+        "You are a strict evaluator. Respond ONLY with valid JSON containing the keys 'extracted_final_answer', 'reasoning', 'correct', and 'confidence'."
     )
 
-    content = response.choices[0].message.parsed
+    response = await openai_client.chat.completions.create(
+        model=model_name or "qwen/qwen3-next-80b-a3b-thinking",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ],
+        max_completion_tokens=512,
+    )
 
-    # Print HLE reasoning
-    print(f"LLM as Judge Reasoning: {content.reasoning}")
-    print(f"LLM as Judge Result: {content.correct}")
-    print(f"LLM as Judge Confidence: {content.confidence}%")
+    content_raw = response.choices[0].message.content
+    data = _extract_json_dict(content_raw)
 
-    # Convert HLE format to eval_utils format
-    if content.correct == "yes":
+    reasoning = data.get("reasoning", "")
+    correct_field = str(data.get("correct", "")).lower()
+    confidence = data.get("confidence", "")
+
+    print(f"LLM as Judge Reasoning: {reasoning}")
+    print(f"LLM as Judge Result: {correct_field}")
+    print(f"LLM as Judge Confidence: {confidence}%")
+
+    if correct_field in ("yes", "true", "correct"):
         return "CORRECT"
-    elif content.correct == "no":
+    elif correct_field in ("no", "false", "incorrect"):
         return "INCORRECT"
     else:
-        raise Exception(f"HLE LLM evaluation failed: {content}")
+        raise Exception(f"HLE LLM evaluation failed: {data}")
 
 
 async def verify_answer_gaia(target: str, predicted_answer: str) -> str:

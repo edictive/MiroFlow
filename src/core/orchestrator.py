@@ -4,6 +4,7 @@
 
 import asyncio
 import datetime
+import json
 import os
 import sys
 import time
@@ -83,6 +84,7 @@ class Orchestrator:
         cfg: DictConfig,
         task_log: TaskTracer,
         sub_agent_llm_client: Optional[LLMProviderClientBase] = None,
+        task_metadata: dict[str, Any] | None = None,
     ):
         self.main_agent_tool_manager = main_agent_tool_manager
         self.sub_agent_tool_managers = sub_agent_tool_managers
@@ -93,6 +95,7 @@ class Orchestrator:
         self.output_formatter = output_formatter
         self.cfg = cfg
         self.task_log = task_log
+        self.task_metadata = task_metadata or {}
         # call this once, then use cache value
         self._list_sub_agent_tools = _list_tools(sub_agent_tool_managers)
 
@@ -119,6 +122,317 @@ class Orchestrator:
             and self.sub_agent_llm_client != self.llm_client
         ):
             self.sub_agent_llm_client.task_log = task_log
+
+        self._search_restriction_applied = False
+        self._search_cutoff_datetime: datetime.datetime | None = None
+        self._search_cutoff_tbs: str | None = None
+        self._search_server_names = {"tool-searching", "tool-serper-search"}
+
+        self._initialize_futurex_search_constraints()
+
+    def _initialize_futurex_search_constraints(self) -> None:
+        """Derive and store search cutoffs for FutureX tasks."""
+        benchmark_name = ""
+        if hasattr(self.cfg, "benchmark") and self.cfg.benchmark is not None:
+            benchmark_name = str(getattr(self.cfg.benchmark, "name", ""))
+
+        if benchmark_name.lower() != "futurex":
+            return
+
+        cutoff_dt = self._derive_search_cutoff_from_metadata()
+
+        if cutoff_dt is None:
+            if self.task_metadata and self.task_log:
+                self.task_log.log_step(
+                    "search_cutoff_missing_metadata",
+                    "FutureX task metadata missing a valid end_time; unable to enforce search cutoff.",
+                    status="warning",
+                )
+            return
+
+        self._search_cutoff_datetime = cutoff_dt
+        self._search_cutoff_tbs = self._format_google_custom_date_range(cutoff_dt)
+        self._search_restriction_applied = True
+
+        if self.task_log:
+            self.task_log.log_step(
+                "search_cutoff_initialized",
+                (
+                    "Applied FutureX search cutoff: only results published on or before "
+                    f"{cutoff_dt.isoformat()} will be available to the agent."
+                ),
+                metadata={
+                    "cutoff_iso": cutoff_dt.isoformat(),
+                    "tbs": self._search_cutoff_tbs,
+                },
+            )
+
+    def _derive_search_cutoff_from_metadata(self) -> datetime.datetime | None:
+        """Return the datetime cutoff (resolution - 8 days) if available."""
+        if not self.task_metadata:
+            return None
+
+        end_time_value = self.task_metadata.get("end_time")
+        # Some datasets might rename the field; support a couple of aliases.
+        if end_time_value is None:
+            end_time_value = self.task_metadata.get("resolution_date")
+
+        parsed_end_time = self._parse_metadata_datetime(end_time_value)
+        if parsed_end_time is None:
+            return None
+
+        cutoff_dt = parsed_end_time - datetime.timedelta(days=8)
+        return cutoff_dt
+
+    @staticmethod
+    def _parse_metadata_datetime(value: Any) -> datetime.datetime | None:
+        """Parse end_time metadata into a timezone-aware datetime."""
+        if value is None:
+            return None
+
+        if isinstance(value, datetime.datetime):
+            dt = value
+        elif isinstance(value, datetime.date):
+            dt = datetime.datetime(
+                year=value.year,
+                month=value.month,
+                day=value.day,
+                tzinfo=datetime.timezone.utc,
+            )
+        elif isinstance(value, str):
+            candidate = value.strip()
+            if not candidate:
+                return None
+            candidate = candidate.replace("Z", "+00:00")
+            try:
+                dt = datetime.datetime.fromisoformat(candidate)
+            except ValueError:
+                # Attempt common fallback formats
+                fallback_formats = [
+                    "%Y-%m-%d",
+                    "%Y/%m/%d",
+                    "%d-%m-%Y",
+                    "%m/%d/%Y",
+                ]
+                dt = None
+                for fmt in fallback_formats:
+                    try:
+                        parsed = datetime.datetime.strptime(candidate, fmt)
+                        dt = parsed.replace(tzinfo=datetime.timezone.utc)
+                        break
+                    except ValueError:
+                        continue
+                if dt is None:
+                    return None
+        else:
+            return None
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        else:
+            dt = dt.astimezone(datetime.timezone.utc)
+        return dt
+
+    @staticmethod
+    def _format_google_custom_date_range(cutoff_dt: datetime.datetime) -> str:
+        """Format Google custom date range (tbs) parameter up to the cutoff date."""
+        cutoff_date = cutoff_dt.date()
+        cutoff_str = cutoff_date.strftime("%m/%d/%Y")
+        # Use a very early minimum date to keep range valid.
+        return f"cdr:1,cd_min:01/01/1900,cd_max:{cutoff_str}"
+
+    def _apply_search_time_cutoff_to_arguments(
+        self, server_name: str, tool_name: str, arguments: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Ensure google_search arguments respect the cutoff."""
+        if (
+            not self._search_restriction_applied
+            or server_name not in self._search_server_names
+            or tool_name != "google_search"
+        ):
+            return arguments
+
+        original_tbs = arguments.get("tbs")
+
+        if original_tbs == self._search_cutoff_tbs:
+            return arguments
+
+        arguments["tbs"] = self._search_cutoff_tbs
+
+        if self.task_log:
+            message = (
+                "Applied time-restricted search window (8 days prior to resolution)."
+            )
+            metadata = {
+                "server": server_name,
+                "original_tbs": original_tbs,
+                "applied_tbs": self._search_cutoff_tbs,
+            }
+            self.task_log.log_step(
+                "search_cutoff_arguments",
+                message,
+                metadata=metadata,
+            )
+
+        return arguments
+
+    def _enforce_search_cutoff_on_tool_result(
+        self,
+        server_name: str,
+        tool_name: str,
+        tool_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Filter google_search results to honour the cutoff."""
+        if (
+            not self._search_restriction_applied
+            or server_name not in self._search_server_names
+            or tool_name != "google_search"
+        ):
+            return tool_result
+
+        if not isinstance(tool_result, dict):
+            return tool_result
+
+        result_payload = tool_result.get("result")
+        if not isinstance(result_payload, str) or not result_payload.strip():
+            return tool_result
+
+        try:
+            parsed = json.loads(result_payload)
+        except json.JSONDecodeError:
+            return tool_result
+
+        filtered_payload, removed_count = self._filter_google_search_payload(parsed)
+
+        if removed_count > 0:
+            tool_result["result"] = json.dumps(
+                filtered_payload, ensure_ascii=False, indent=2
+            )
+            if self.task_log:
+                self.task_log.log_step(
+                    "search_cutoff_results",
+                    (
+                        f"Removed {removed_count} search results newer than "
+                        f"{self._search_cutoff_datetime.isoformat()}."
+                    ),
+                    metadata={"server": server_name},
+                )
+
+        return tool_result
+
+    def _filter_google_search_payload(
+        self, payload: dict[str, Any]
+    ) -> tuple[dict[str, Any], int]:
+        """Filter organic/news entries based on cutoff."""
+        if self._search_cutoff_datetime is None:
+            return payload, 0
+
+        removed_total = 0
+        sections_to_filter = ["organic", "news"]
+
+        for section in sections_to_filter:
+            entries = payload.get(section)
+            if not isinstance(entries, list):
+                continue
+
+            filtered_entries = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    removed_total += 1
+                    continue
+
+                raw_date = entry.get("date") or entry.get("publishedDate")
+                entry_dt = self._parse_search_result_date(raw_date)
+
+                if entry_dt is None:
+                    removed_total += 1
+                    continue
+
+                if entry_dt <= self._search_cutoff_datetime:
+                    filtered_entries.append(entry)
+                else:
+                    removed_total += 1
+
+            payload[section] = filtered_entries
+
+        return payload, removed_total
+
+    @staticmethod
+    def _parse_search_result_date(value: Any) -> datetime.datetime | None:
+        """Parse date strings returned by Serper into UTC datetimes."""
+        if value is None:
+            return None
+
+        if isinstance(value, datetime.datetime):
+            dt = value
+        elif isinstance(value, datetime.date):
+            dt = datetime.datetime(
+                value.year, value.month, value.day, tzinfo=datetime.timezone.utc
+            )
+        elif isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+
+            lowered = text.lower()
+            if "ago" in lowered:
+                # "N days ago" implies very recent content; treat as newer than cutoff.
+                return datetime.datetime.max.replace(tzinfo=datetime.timezone.utc)
+
+            common_prefixes = [
+                "updated ",
+                "published ",
+                "last updated ",
+                "last modified ",
+            ]
+            for prefix in common_prefixes:
+                if lowered.startswith(prefix):
+                    text = text[len(prefix) :]
+                    break
+
+            separators = [" — ", " – ", " | "]
+            for sep in separators:
+                if sep in text:
+                    text = text.split(sep)[0]
+
+            text = text.replace("\u00a0", " ")  # non-breaking space
+
+            candidate = text
+            candidate = candidate.replace("Z", "+00:00")
+
+            parse_formats = [
+                "%Y-%m-%d",
+                "%Y/%m/%d",
+                "%m/%d/%Y",
+                "%b %d, %Y",
+                "%B %d, %Y",
+                "%d %b %Y",
+                "%d %B %Y",
+            ]
+
+            dt = None
+            for fmt in parse_formats:
+                try:
+                    parsed = datetime.datetime.strptime(candidate, fmt)
+                    dt = parsed.replace(tzinfo=datetime.timezone.utc)
+                    break
+                except ValueError:
+                    continue
+
+            if dt is None:
+                try:
+                    dt = datetime.datetime.fromisoformat(candidate)
+                except ValueError:
+                    return None
+        else:
+            return None
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        else:
+            dt = dt.astimezone(datetime.timezone.utc)
+
+        return dt
 
     async def _handle_llm_call_with_logging(
         self,
@@ -508,6 +822,12 @@ class Orchestrator:
                 arguments = call["arguments"]
                 call_id = call["id"]
 
+                if isinstance(arguments, dict):
+                    arguments = self._apply_search_time_cutoff_to_arguments(
+                        server_name, tool_name, arguments
+                    )
+                    call["arguments"] = arguments
+
                 self.task_log.log_step(
                     "sub_agent_tool_call_start",
                     f"Executing {tool_name} on {server_name}",
@@ -518,6 +838,11 @@ class Orchestrator:
                     tool_result = await self.sub_agent_tool_managers[
                         sub_agent_name
                     ].execute_tool_call(server_name, tool_name, arguments)
+
+                    if isinstance(tool_result, dict):
+                        tool_result = self._enforce_search_cutoff_on_tool_result(
+                            server_name, tool_name, tool_result
+                        )
 
                     call_end_time = time.time()
                     call_duration_ms = int((call_end_time - call_start_time) * 1000)
@@ -855,6 +1180,12 @@ Your objective is maximum completeness, transparency, and detailed documentation
                 arguments = call["arguments"]
                 call_id = call["id"]
 
+                if isinstance(arguments, dict):
+                    arguments = self._apply_search_time_cutoff_to_arguments(
+                        server_name, tool_name, arguments
+                    )
+                    call["arguments"] = arguments
+
                 call_start_time = time.time()
                 try:
                     if server_name.startswith("agent-"):
@@ -873,6 +1204,13 @@ Your objective is maximum completeness, transparency, and detailed documentation
                                 tool_name=tool_name,
                                 arguments=arguments,
                             )
+                        )
+                    if (
+                        not server_name.startswith("agent-")
+                        and isinstance(tool_result, dict)
+                    ):
+                        tool_result = self._enforce_search_cutoff_on_tool_result(
+                            server_name, tool_name, tool_result
                         )
 
                     call_end_time = time.time()

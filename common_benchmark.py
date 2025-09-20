@@ -245,6 +245,7 @@ class BenchmarkEvaluator(ABC):
                             main_agent_tool_manager=self.main_agent_tool_manager,
                             sub_agent_tool_managers=self.sub_agent_tool_managers,
                             output_formatter=self.output_formatter,
+                            task_metadata=task.metadata,
                             ground_truth=task.ground_truth,
                             log_path=self.output_dir
                             / f"task_{task.task_id}_attempt_{attempt}.json",
