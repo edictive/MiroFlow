@@ -10,9 +10,13 @@ main_agent:
 
 sub_agents:
   agent-worker:
+    prompt_class: SubAgentWorkerPrompt
     llm:
       model_name: ${oc.env:WORKER_MODEL_NAME,qwen/qwen3-next-80b-a3b-thinking}
       openrouter_provider: ${oc.env:WORKER_PROVIDER,""}
+    tool_config:
+      - tool-serper-search
+      # - tool-reasoning (needs anthropic apparently)
 
 output_dir: ${oc.env:OUTPUT_DIR,logs/futurex_single_run}
 data_dir: ${oc.env:DATA_DIR,data}
