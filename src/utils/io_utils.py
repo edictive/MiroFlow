@@ -127,8 +127,19 @@ class OutputFormatter:
             return ""
 
         tokens = [part.strip() for part in re.split(r"[,\n]+", stripped) if part.strip()]
-        if tokens:
-            return tokens[0]
+        if len(tokens) <= 1:
+            return stripped
+
+        pattern = re.compile(r"^[A-Z](?:[.)])?$")
+        if all(pattern.match(token) for token in tokens):
+            primary = re.sub(r"[.)]$", "", tokens[0]).strip()
+            return primary or tokens[0]
+
+        # If tokens include duplicate text separated by commas (e.g., "Yes, Yes"), keep unique tokens
+        unique_tokens = list(dict.fromkeys(tokens))
+        if len(unique_tokens) == 1:
+            return unique_tokens[0]
+
         return stripped
 
     def format_tool_result_for_user(self, tool_call_execution_result):
