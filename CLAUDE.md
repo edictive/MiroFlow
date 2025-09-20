@@ -27,7 +27,21 @@ MiroFlow is a Python-based benchmark evaluation framework for LLM agents with mu
 
 ## Recent Enhancements (2025-09-20)
 
-### 1. Fixed Cost Tracking Issues
+### 1. Level Filtering for FutureX Benchmark
+**Added**: Ability to filter FutureX tasks by difficulty level (1-4)
+
+**Features**:
+- `level_filter` parameter in benchmark config
+- Runtime level filtering via just commands
+- Support for testing specific difficulty levels
+- Enhanced filter logic to work alongside existing whitelist filtering
+
+**Usage**:
+```bash
+just test-10-tasks "model" "futurex-past" "4"  # Test only hardest questions
+```
+
+### 2. Fixed Cost Tracking Issues
 **Problem**: TaskTracer missing `cost_measurement` field causing runtime errors, and per-task costs showing as $0.000000
 
 **Solution**:
@@ -35,7 +49,7 @@ MiroFlow is a Python-based benchmark evaluation framework for LLM agents with mu
 - Enhanced pipeline to pass benchmark cost tracker to task execution
 - Fixed cost aggregation in BenchmarkCostTracker
 
-### 2. Enhanced Task Execution Summary
+### 3. Enhanced Task Execution Summary
 **Added comprehensive summary display including:**
 - **Duration**: Execution time in seconds and minutes
 - **Main Agent Stats**: Turn count and tool call detection (including MCP tools)
@@ -68,13 +82,13 @@ MiroFlow is a Python-based benchmark evaluation framework for LLM agents with mu
 ============================================================
 ```
 
-### 3. Improved Tool Call Detection
+### 4. Improved Tool Call Detection
 **Enhanced to detect:**
 - Structured `tool_use` objects in message content
 - MCP tool calls in string format (`<use_mcp_tool>`)
 - Sub-agent invocations through main agent
 
-### 4. Cost Tracking Architecture
+### 5. Cost Tracking Architecture
 **Added complete cost tracking system:**
 - OpenRouter API integration for credit monitoring
 - Per-task cost measurement with duration tracking
@@ -87,10 +101,18 @@ MiroFlow is a Python-based benchmark evaluation framework for LLM agents with mu
 ### Just Commands
 ```bash
 # Test single task
-just test-1-task [model] [dataset]
+just test-1-task [model] [dataset] [level]
+
+# Test multiple tasks
+just test-10-tasks [model] [dataset] [level]
+just test-50-tasks [model] [dataset] [level]
 
 # Run with specific models
 just test-1-task "qwen/qwen3-30b-a3b" "futurex-past"
+
+# Test specific difficulty levels (1-4)
+just test-10-tasks "qwen/qwen3-30b-a3b" "futurex-past" "4"  # Hardest questions
+just test-50-tasks "openai/gpt-4o-mini" "futurex-past" "1"   # Easiest questions
 
 # Prepare dataset
 just prepare-data futurex-past
@@ -138,6 +160,8 @@ uv run main.py common-benchmark \
 2. **Per-task costs showing $0**: Verify benchmark_cost_tracker is passed to execute_task_pipeline
 3. **Tool calls showing 0**: Check MCP tool call detection in TaskTracer.generate_summary()
 4. **Steps in wrong order**: Ensure chronological ordering preservation in step_breakdown
+5. **Rate limiting on OpenRouter**: Switch to less rate-limited models like `openai/gpt-4o-mini` or add your own API keys
+6. **"Server 'sports_data' not found"**: Main agent is hallucinating non-existent tool servers - check tool configuration
 
 ### OpenRouter Integration
 - Requires valid API key in config
