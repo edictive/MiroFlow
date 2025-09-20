@@ -8,4 +8,13 @@ To do list
         Final Answer Summary**  \nThe task to predict the outcome of the match between **Stade Rennais FC 1901** and **Racing Club de Lens** on **2025-09-28** could not be completed due to insufficient data and tool limitations.
         ```
  - [x] Add `just commands` for testing 1 task, testing 10 tasks, and testing all tasks for a particular benchmark, including which model to use
- - [ ] Find appropropriate models which will also 
+ - [x] Run eval on 10 samples from `futurex-past` for `qwen3-30b-a3b` and with `tongyi-deepresearch-30b-a3b`
+    - Note: Scores 5/10, the model is consistently picking 'A'
+    - Appears only 'reading' tool is being used
+    - Current setting seems to be with a single worker agent
+ - [x] Add cost tracking and test on single sample
+ - [ ] Add better summary of number of tool calls, number of sub agents etc
+ - [x] See if we can speed things up. Enable `Throughput (highest first)` provider sort in OpenRouter
+ - [ ] Establish which configs will lead to improved performance
+    - Which tool calls do we need for `futurex`?
+ - [ ] Visualise results in an evals notebook

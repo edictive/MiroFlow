@@ -30,6 +30,9 @@ dependencies = [
     "requests>=2.32.4",
     "filetype>=1.2.0",
     "Pillow",
+    "ipykernel>=6.30.1",
+    "matplotlib>=3.10.6",
+    "seaborn>=0.13.2",
 ]
 
 [build-system]
