@@ -1,4 +1,4 @@
-To do list
+# To do list
 
  - [x] Ensure single task is working using `qwen3-4b`, both for `futurex-online` and `futurex-past`
     - `qwen3-4b` is not actually available on OpenRouter, other than a free rate-limited version. For now we'll use `qwen3-30b-a3b`. 
@@ -35,3 +35,10 @@ Open questions list
     - From FutureX paper: "Another benchmark, GAIA [18], focuses on general-purpose assistant capabilities with 466 real-world questions that require reasoning, multi-modality, web search, and tool use."
     - Shall we just use the same tools as the GAIA benchmark?
  - [ ] Any way to actually make this significantly faster? Still currently taking minutes for every question, prohibitively slow to test anything at the dataset level.
+
+ Alex to-dos
+  - Get search MCP working locally for yourself, generally reproduce current state and make sure you can `just` run things
+  - Need to figure out the other tool calls. So reasoning, and code. Tool config for main agent and for sub agents, and testing that works
+  - Upgrade to bigger model to remove likielihood of small model bugs
+  - Try to make it faster if possible (still 2-3 min per task) [MAYBE]
+  - Get results on the whole dataset, and calculate (ideally visualise) an overall score. Would be best if we can sanity check that score against what is on the website. So either gpt5 ($$$) or compare to a model we know the size of.
