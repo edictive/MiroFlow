@@ -148,6 +148,19 @@ class BenchmarkEvaluator(ABC):
             evaluation_base_url = cfg.benchmark.get("openai_base_url")
             if evaluation_base_url:
                 client_kwargs["base_url"] = evaluation_base_url
+
+            default_headers: dict[str, str] = {}
+            referer = cfg.benchmark.get("openai_http_referer") or os.getenv(
+                "OPENROUTER_HTTP_REFERER"
+            )
+            title = cfg.benchmark.get("openai_title") or os.getenv("OPENROUTER_TITLE")
+            if referer:
+                default_headers["HTTP-Referer"] = referer
+            if title:
+                default_headers["X-Title"] = title
+            if default_headers:
+                client_kwargs["default_headers"] = default_headers
+
             self.evaluation_llm = openai.AsyncOpenAI(**client_kwargs)
         else:
             self.evaluation_model_name = None

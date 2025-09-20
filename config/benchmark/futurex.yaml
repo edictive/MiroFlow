@@ -18,4 +18,6 @@ execution:
 # Reuse OpenRouter via the same API key and specify model/base URL for judging
 openai_api_key: "${oc.env:OPENROUTER_API_KEY,skip_evaluation}"
 openai_base_url: "${oc.env:OPENROUTER_BASE_URL,https://openrouter.ai/api/v1}"
-openai_model_name: "${oc.env:OPENROUTER_EVAL_MODEL,anthropic/claude-sonnet-4}"
+openai_model_name: "${oc.env:OPENROUTER_EVAL_MODEL,qwen/qwen3-next-80b-a3b-thinking}"
+openai_http_referer: "${oc.env:OPENROUTER_HTTP_REFERER,}"
+openai_title: "${oc.env:OPENROUTER_TITLE,}"

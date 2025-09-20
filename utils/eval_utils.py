@@ -119,14 +119,32 @@ async def verify_answer_llm_simpleqa(
     llm_response = await openai_client.chat.completions.create(
         model=model_name or "qwen/qwen3-next-80b-a3b-thinking",
         messages=messages,
-        max_completion_tokens=16,
+        max_completion_tokens=32,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "simpleqa_grade",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {
+                            "type": "string",
+                            "enum": ["A", "B", "C"],
+                            "description": "Grade letter: A=CORRECT, B=INCORRECT, C=NOT_ATTEMPTED",
+                        }
+                    },
+                    "required": ["answer"],
+                    "additionalProperties": False,
+                },
+            },
+        },
     )
-    content = llm_response.choices[0].message.content
-    match = re.search(r"(A|B|C)", content)
-    if match:
-        return CHOICE_MAP[match.group(0)]
-    else:
-        raise Exception(f"SimpleQA LLM evaluation failed: {content}")
+    content_raw = llm_response.choices[0].message.content
+    data = _extract_json_dict(content_raw)
+    letter = str(data.get("answer", "")).strip().upper()
+    if letter in CHOICE_MAP:
+        return CHOICE_MAP[letter]
+    raise Exception(f"SimpleQA LLM evaluation failed: {data}")
 
 
 # XBench LLM Judge prompt template (Chinese)
@@ -195,17 +213,29 @@ async def verify_answer_llm_xbench(
         question=question, correct_answer=target, response=predicted_answer
     )
 
-    system_prompt = (
-        "You are a strict evaluator. Respond ONLY with valid JSON containing the keys 'final_answer', 'reasoning', and 'verdict'."
-    )
-
     response = await openai_client.chat.completions.create(
         model=model_name or "qwen/qwen3-next-80b-a3b-thinking",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ],
+        messages=[{"role": "user", "content": prompt}],
         max_completion_tokens=512,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "xbench_judge",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "final_answer": {"type": "string"},
+                        "reasoning": {"type": "string"},
+                        "verdict": {
+                            "type": "string",
+                            "enum": ["正确", "错误", "CORRECT", "INCORRECT", "YES", "NO", "NOT_ATTEMPTED"],
+                        },
+                    },
+                    "required": ["final_answer", "verdict"],
+                    "additionalProperties": False,
+                },
+            },
+        },
     )
 
     content_raw = response.choices[0].message.content
@@ -213,15 +243,16 @@ async def verify_answer_llm_xbench(
 
     final_answer = data.get("final_answer", "")
     reasoning = data.get("reasoning", "")
-    verdict = data.get("verdict", "")
+    verdict = str(data.get("verdict", "")).strip()
 
     print(f"XBench LLM Judge Extracted Answer: {final_answer}")
     print(f"XBench LLM Judge Reasoning: {reasoning}")
     print(f"XBench LLM Judge Result: {verdict}")
 
-    if verdict in ("正确", "CORRECT", "YES", "yes", "correct"):
+    normalized_verdict = verdict.lower()
+    if normalized_verdict in ("正确", "correct", "yes"):
         return "CORRECT"
-    elif verdict in ("错误", "INCORRECT", "NO", "no", "incorrect"):
+    elif normalized_verdict in ("错误", "incorrect", "no"):
         return "INCORRECT"
     else:
         raise Exception(f"XBench LLM evaluation failed: {data}")
@@ -279,17 +310,32 @@ async def verify_answer_llm_hle(
         question=question, correct_answer=target, response=predicted_answer
     )
 
-    system_prompt = (
-        "You are a strict evaluator. Respond ONLY with valid JSON containing the keys 'extracted_final_answer', 'reasoning', 'correct', and 'confidence'."
-    )
-
     response = await openai_client.chat.completions.create(
         model=model_name or "qwen/qwen3-next-80b-a3b-thinking",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
-        ],
+        messages=[{"role": "user", "content": prompt}],
         max_completion_tokens=512,
+        response_format={
+            "type": "json_schema",
+            "json_schema": {
+                "name": "hle_judge",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "extracted_final_answer": {"type": "string"},
+                        "reasoning": {"type": "string"},
+                        "correct": {
+                            "type": "string",
+                            "enum": ["yes", "no", "correct", "incorrect", "true", "false"],
+                        },
+                        "confidence": {
+                            "type": ["integer", "number", "string"],
+                        },
+                    },
+                    "required": ["correct"],
+                    "additionalProperties": False,
+                },
+            },
+        },
     )
 
     content_raw = response.choices[0].message.content
